@@ -1,0 +1,5 @@
+README
+=======
+- bluez-spp-test
+  python script (base on pybluez example rfcomm-client.py)
+  android source (base on bluetooth chat)
