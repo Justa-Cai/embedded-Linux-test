@@ -14,15 +14,20 @@ CPPFLAGS = $(CFLAGS)
 
 
 EXE:=$(shell basename $(shell pwd))
-
-SRCS=$(wildcard *.c)
+EXE2:=fb_capture
+SRCS=main.c
 OBJS=$(patsubst %.c,%.o,$(SRCS))
 
 EXE:=$(shell basename $(shell pwd))
 
 INSTALL_PATH:=/tftproot/mini2440/rootfs/
 
-all: $(EXE)
+all: $(EXE) $(EXE2)
+
+$(EXE2): fb_capture.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	@$(STRIP) $@	
+	@cp -fv $@ $(INSTALL_PATH)
 
 $(EXE): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

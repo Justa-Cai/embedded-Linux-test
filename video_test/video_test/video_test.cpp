@@ -65,13 +65,13 @@ char *ReadAllFromImage(const char *path, off_t *len)
 #define CAL_YUV_G(y, cb, cr) (1.1665*(y-16.5) - 0.3922*(cb - 128.5) + 0.8151*(cr - 128.5))
 #define CAL_YUV_B(y, cb, cr) (1.1665*(y-16.5) - 2.0218*(cb - 128.5) - 0.0013*(cr - 128.5))
 #else
-//#define CAL_YUV_R(y, cb, cr) (y + 1.4075*(cr-128))
-//#define CAL_YUV_G(y, cb, cr) (y - 0.3455 * (cb - 128) - (0.7169 * (cr - 128)))
-//#define CAL_YUV_B(y, cb, cr) (y + 1.7790 * (cb - 128))
+#define CAL_YUV_R(y, cb, cr) (y + 1.4075*(cr-128))
+#define CAL_YUV_G(y, cb, cr) (y - 0.3455 * (cb - 128) - (0.7169 * (cr - 128)))
+#define CAL_YUV_B(y, cb, cr) (y + 1.7790 * (cb - 128))
 
-#define CAL_YUV_R(y, u, v) (y+ 0 * u + 1.13983 * v)
-#define CAL_YUV_G(y, u, v) (y -0.39465 * u + -0.58060 * v)
-#define CAL_YUV_B(y, u, v) (y -0.03211 * u + 0 * v)
+//#define CAL_YUV_R(y, u, v) (y+ 0 * u + 1.13983 * v)
+//#define CAL_YUV_G(y, u, v) (y -0.39465 * u + -0.58060 * v)
+//#define CAL_YUV_B(y, u, v) (y -0.03211 * u + 0 * v)
 #endif
 
 static inline unsigned char clamp(float v)
@@ -89,25 +89,28 @@ enum
 	YUV2_RGB_888,
 	YUV2_RGB_565,
 };
-
+#define COLOR_TO_MTK_COLOR_SIMUL(color) ((((color) >> 19) & 0x1f) << 11) \
+	|((((color) >> 10) & 0x3f) << 5)  \
+	|(((color) >> 3) & 0x1f) 
 char* yuv2rgb(const unsigned char *pYuv, int length, int type)
 {
 	char *pBuf, *ptr;
 	unsigned char r,g,b;
-	unsigned short v;
+	unsigned short v, *pShort;
 	float cb0, y0, cr0, y1;
 
 	pBuf = (char *)malloc(g_bmp_data_size);
 	memset(pBuf, 0x0, g_bmp_data_size);
 	ptr = pBuf;
+	pShort = (unsigned short*)pBuf;
 	for (int i=0; i<length;)
 	{
 		y0  = (unsigned char)pYuv[i++];
 		cb0 = (unsigned char)pYuv[i++];
 		y1  = (unsigned char)pYuv[i++];
 		cr0 = (unsigned char)pYuv[i++];
-		cb0 = 0;
-		cr0 = 0;
+		//cb0 = 128;
+		//cr0 = 128;
 
 		if (type == YUV2_RGB_888)
 		{
@@ -123,21 +126,20 @@ char* yuv2rgb(const unsigned char *pYuv, int length, int type)
 		{
 			//             11             7  6    5         0
 			// R5 R4 R3 R2 R1 G6 G5 G4 G3 G2 G1 B5 B4 B3 B2 B1 
+			// 5:6:5
+			// 8:8:8
+			// 
 			r = clamp(CAL_YUV_R(y0, cb0, cr0));
 			g = clamp(CAL_YUV_G(y0, cb0, cr0));
 			b = clamp(CAL_YUV_B(y0, cb0, cr0));
-			v = 0;
-			v = (((r>>3)&0x1f)<<11 | (g>>2&0x2f)<<6 | ((b>>3)&0x1f));
-			*ptr++ = v>>8 &0xff;
-			*ptr++ = v&0xff;
+			v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
+			*pShort++=v;
 
 			r = clamp(CAL_YUV_R(y1, cb0, cr0));
 			g = clamp(CAL_YUV_G(y1, cb0, cr0));
 			b = clamp(CAL_YUV_B(y1, cb0, cr0));
-			v = 0;
-			v = (((r>>3)&0x1f)<<11 | (g>>2&0x2f)<<6 | ((b>>3)&0x1f));
-			*ptr++ = v>>8 &0xff;
-			*ptr++ = v&0xff;
+			v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
+			*pShort++= v;
 
 		}
 	}
@@ -153,6 +155,8 @@ int WriteIntoBmp(char *ptr, int bitcount)
 
 	BITMAPFILEHEADER bmp_head;
 	BITMAPINFOHEADER  bmp_info;
+	unsigned int rgb[4];
+
 	if (access(BMP_PATH, 0)==0)
 		remove(BMP_PATH);
 
@@ -164,18 +168,27 @@ int WriteIntoBmp(char *ptr, int bitcount)
 	CLEAR(bmp_info);
 
 	bmp_head.bfType = 'B' | 'M' <<8;
-	bmp_head.bfSize = sizeof(bmp_info) + sizeof(bmp_head) + YUV_WIDTH*YUV_HEIGHT*bitcount/8;
+	bmp_head.bfSize = sizeof(bmp_info) + sizeof(bmp_head) + YUV_WIDTH*YUV_HEIGHT*bitcount/8 + sizeof(int);
 	bmp_head.bfOffBits = sizeof(bmp_info) + sizeof(bmp_head);
 
 	bmp_info.biSize  = sizeof(bmp_info);
 	bmp_info.biWidth = YUV_WIDTH;
 	bmp_info.biHeight = YUV_HEIGHT;
 	bmp_info.biBitCount = bitcount;
+	if (bitcount == 16)
+		bmp_info.biCompression =  BI_BITFIELDS;
 	bmp_info.biSizeImage = YUV_WIDTH*YUV_HEIGHT*bitcount/8;
 	bmp_info.biXPelsPerMeter = bmp_info.biYPelsPerMeter = 0; // DIP£¿
 
 	fwrite(&bmp_head, sizeof(bmp_head), 1, fp);
 	fwrite(&bmp_info, sizeof(bmp_info), 1, fp);
+	if (bitcount == 16)
+	{
+		rgb[0] = 0xF800;
+		rgb[1] = 0x07E0;
+		rgb[2] = 0x001F;
+		fwrite(rgb, sizeof(rgb), 1, fp);
+	}
 
 
 #if 0
@@ -191,6 +204,7 @@ int WriteIntoBmp(char *ptr, int bitcount)
 		free(pBuf);
 		fwrite(pBuf, BMP_DATA_SIZE, 1, fp);
 #else
+//	fwrite(ptr, YUV_WIDTH*bitcount/8*YUV_HEIGHT, 1, fp);
 	for (int i=0; i<YUV_HEIGHT; i++)
 		fwrite(ptr+(YUV_HEIGHT-i)*YUV_WIDTH*bitcount/8, YUV_WIDTH*bitcount/8, 1, fp);
 #endif

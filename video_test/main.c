@@ -62,9 +62,9 @@ static int xioctl(int fh, int request, void *arg)
         return r;
 }
 
-#define CAL_YUV_R(y, u, v) (y+ 0 * u + 1.13983 * v)
-#define CAL_YUV_G(y, u, v) (y -0.39465 * u + -0.58060 * v)
-#define CAL_YUV_B(y, u, v) (y -0.03211 * u + 0 * v)
+#define CAL_YUV_R(y, cb, cr) (y + 1.4075*(cr-128))
+#define CAL_YUV_G(y, cb, cr) (y - 0.3455 * (cb - 128) - (0.7169 * (cr - 128)))
+#define CAL_YUV_B(y, cb, cr) (y + 1.7790 * (cb - 128))
 
 static inline unsigned char clamp(float v)
 {
@@ -80,7 +80,7 @@ int yuv2rgb(const unsigned char *pYuv, int length)
 {
 	char *ptr;
 	unsigned char r,g,b;
-	unsigned short v;
+	unsigned short v, *pShort;
 	float cb0, y0, cr0, y1;
 
 	static char *pBuf = NULL;
@@ -90,32 +90,30 @@ int yuv2rgb(const unsigned char *pYuv, int length)
 	}
 
 	ptr = pBuf;
-//	return 0;
+	pShort = (unsigned short*)pBuf;
+
 	for (int i=0; i<length;)
 	{
 		y0  = (unsigned char)pYuv[i++];
 		cb0 = (unsigned char)pYuv[i++];
 		y1  = (unsigned char)pYuv[i++];
 		cr0 = (unsigned char)pYuv[i++];
-		cb0 = 0;
-		cr0 = 0;
+	//	cb0 = 0;
+	//	cr0 = 0;
 			//             11             7  6    5         0
 			// R5 R4 R3 R2 R1 G6 G5 G4 G3 G2 G1 B5 B4 B3 B2 B1 
-			r = clamp(CAL_YUV_R(y0, cb0, cr0));
-			g = clamp(CAL_YUV_G(y0, cb0, cr0));
-			b = clamp(CAL_YUV_B(y0, cb0, cr0));
-			v = 0;
-			v = (((r>>3)&0x1f)<<11 | (g>>2&0x2f)<<6 | ((b>>3)&0x1f));
-			*ptr++ = v>>8 &0xff;
-			*ptr++ = v&0xff;
+		r = clamp(CAL_YUV_R(y0, cb0, cr0));
+		g = clamp(CAL_YUV_G(y0, cb0, cr0));
+		b = clamp(CAL_YUV_B(y0, cb0, cr0));
+		v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
+		*pShort++=v;
 
-			r = clamp(CAL_YUV_R(y1, cb0, cr0));
-			g = clamp(CAL_YUV_G(y1, cb0, cr0));
-			b = clamp(CAL_YUV_B(y1, cb0, cr0));
-			v = 0;
-			v = (((r>>3)&0x1f)<<11 | (g>>2&0x2f)<<6 | ((b>>3)&0x1f));
-			*ptr++ = v>>8 &0xff;
-			*ptr++ = v&0xff;
+		r = clamp(CAL_YUV_R(y1, cb0, cr0));
+		g = clamp(CAL_YUV_G(y1, cb0, cr0));
+		b = clamp(CAL_YUV_B(y1, cb0, cr0));
+		v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
+		*pShort++= v;
+
 
 	}
 	memcpy(fb_buf, pBuf, finfo.smem_len);
