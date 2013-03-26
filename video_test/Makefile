@@ -15,6 +15,7 @@ CPPFLAGS = $(CFLAGS)
 
 EXE:=$(shell basename $(shell pwd))
 EXE2:=fb_capture
+EXE3:=v4l_test
 SRCS=main.c
 OBJS=$(patsubst %.c,%.o,$(SRCS))
 
@@ -22,7 +23,12 @@ EXE:=$(shell basename $(shell pwd))
 
 INSTALL_PATH:=/tftproot/mini2440/rootfs/
 
-all: $(EXE) $(EXE2)
+all: $(EXE) $(EXE2) $(EXE3)
+
+$(EXE3): v4l_test.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS) -L./sdk/lib/ -lv4l2 -l v4lconvert
+	@$(STRIP) $@	
+	@cp -fv $@ $(INSTALL_PATH)
 
 $(EXE2): fb_capture.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)

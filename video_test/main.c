@@ -20,6 +20,8 @@
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
+static void start_capturing(void);
+static void stop_capturing(void);
 enum io_method {
         IO_METHOD_READ,
         IO_METHOD_MMAP,
@@ -66,6 +68,9 @@ static int xioctl(int fh, int request, void *arg)
 #define CAL_YUV_G(y, cb, cr) (y - 0.3455 * (cb - 128) - (0.7169 * (cr - 128)))
 #define CAL_YUV_B(y, cb, cr) (y + 1.7790 * (cb - 128))
 
+//#define CAL_YUV_R(y, u, v) (y+ 0 * u + 1.13983 * v)
+//#define CAL_YUV_G(y, u, v) (y -0.39465 * u + -0.58060 * v)
+//#define CAL_YUV_B(y, u, v) (y -0.03211 * u + 0 * v)
 static inline unsigned char clamp(float v)
 {
 	if (v>255)
@@ -80,13 +85,16 @@ int yuv2rgb(const unsigned char *pYuv, int length)
 {
 	char *ptr;
 	unsigned char r,g,b;
-	unsigned short v, *pShort;
+	unsigned short v, *pShort, *pShort2;
+	unsigned char *pMem1;
 	float cb0, y0, cr0, y1;
 
 	static char *pBuf = NULL;
+	static char *pBuf2 = NULL;
 	if (!pBuf)
 	{
 		pBuf = (char*)malloc(finfo.smem_len);
+		pBuf2 = (char*)malloc(finfo.smem_len);
 	}
 
 	ptr = pBuf;
@@ -98,8 +106,10 @@ int yuv2rgb(const unsigned char *pYuv, int length)
 		cb0 = (unsigned char)pYuv[i++];
 		y1  = (unsigned char)pYuv[i++];
 		cr0 = (unsigned char)pYuv[i++];
-	//	cb0 = 0;
-	//	cr0 = 0;
+		//cb0 = 128;
+		//cr0 = 128;
+		//cb0 = 0;
+		//cr0 = 0;
 			//             11             7  6    5         0
 			// R5 R4 R3 R2 R1 G6 G5 G4 G3 G2 G1 B5 B4 B3 B2 B1 
 		r = clamp(CAL_YUV_R(y0, cb0, cr0));
@@ -114,9 +124,28 @@ int yuv2rgb(const unsigned char *pYuv, int length)
 		v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
 		*pShort++= v;
 
-
 	}
-	memcpy(fb_buf, pBuf, finfo.smem_len);
+
+
+	// rorate 90
+	//  ------------------           ---------------------
+	// |(x,y)                       |              (x1,y1)
+	// |                            |
+	// |                            |
+	// |                            |
+	// |                            |
+	// |                            |
+
+	pMem1 = pBuf;
+	pShort = (unsigned short *)pBuf;
+	pShort2 = (unsigned short *)pBuf2;
+	for (int i=0; i<320; i++)
+		for (int j=240; j>0; j--)
+	{
+		*pShort2++ = *(unsigned short*)(pMem1 + 2*j*320+ 2*i);
+	}
+
+	memcpy(fb_buf, pBuf2, finfo.smem_len);
 	return 0;
 }
 
@@ -131,8 +160,9 @@ static void process_image(const void *p, int size)
 		return ;
 	}
 
-	if (fb_buf)
+	if (fb_buf && size==320*240*2)
 	{
+		printf("size:%d\n", size);
 		yuv2rgb(p, size);
 		return;
 	}
@@ -555,7 +585,9 @@ static void init_device(void)
                 fmt.fmt.pix.height      = 320;
                 fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
                 fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
+				fprintf(stderr, "\033[35m== %s %s %d ==\033[0m\n", __FILE__, __FUNCTION__, __LINE__);
 
+				fprintf(stderr, "ret:%d\n", ioctl(fd, VIDIOC_TRY_FMT, &fmt));
                 if (-1 == xioctl(fd, VIDIOC_S_FMT, &fmt))
                         errno_exit("VIDIOC_S_FMT");
 
@@ -574,7 +606,7 @@ static void init_device(void)
         if (fmt.fmt.pix.sizeimage < min)
                 fmt.fmt.pix.sizeimage = min;
 
-		printf("width:%d height:%d\n", fmt.fmt.pix.width, fmt.fmt.pix.height);
+		printf("width:%d height:%d pixelformat:%#x\n", fmt.fmt.pix.width, fmt.fmt.pix.height, fmt.fmt.pix.pixelformat);
 
         switch (io) {
         case IO_METHOD_READ:
@@ -656,6 +688,7 @@ long_options[] = {
         { "video",  required_argument, NULL, 'v' },
         { 0, 0, 0, 0 }
 };
+
 static int vt_set_mode(int graphics)
 {
 	int fd, r;
@@ -666,6 +699,7 @@ static int vt_set_mode(int graphics)
 	close(fd);
 	return r;
 }
+
 int main(int argc, char **argv)
 {
 	int fd;
@@ -744,7 +778,7 @@ int main(int argc, char **argv)
 			{
 				ioctl(fd, FBIOGET_VSCREENINFO, &vinfo);
 				ioctl(fd, FBIOGET_FSCREENINFO, &finfo);
-				printf("[FB]x:%d y:%d\n", vinfo.xres, vinfo.yres);
+				printf("[FB]x:%d y:%d bits_per_pixel:%d\n", vinfo.xres, vinfo.yres, vinfo.bits_per_pixel);
 				fb_buf = (char*)mmap(NULL, finfo.smem_len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
 				vt_set_mode(1);
 			}
