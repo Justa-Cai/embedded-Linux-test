@@ -46,6 +46,13 @@ static int vt_set_mode(int graphics)
 	close(fd);
 	return r;
 }
+static unsigned int get_time_now()
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return tv.tv_sec*1000 + tv.tv_usec/1000;
+}
+
 static struct fb_fix_screeninfo finfo;
 static struct fb_var_screeninfo vinfo;
 int main(int argc, char **argv)
@@ -69,6 +76,7 @@ int main(int argc, char **argv)
 	unsigned char *pOutBuf, *pOutBufTmp;
 	int out_length, yuv_length;
 	int ret;
+	unsigned int t1;
 
 	int fb_fd;
 	unsigned char *fb_buf;
@@ -104,11 +112,12 @@ int main(int argc, char **argv)
 	yuv_length = fmt.fmt.pix.width* fmt.fmt.pix.height*2;
 
 	dest_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-	//xioctl(fd, VIDIOC_G_FMT, &dest_fmt);
-	dest_fmt.fmt.pix.width       = 320;
-	dest_fmt.fmt.pix.height      = 240;
+	xioctl(fd, VIDIOC_G_FMT, &dest_fmt);
+	//dest_fmt.fmt.pix.width       = 320;
+	//dest_fmt.fmt.pix.height      = 240;
 	dest_fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_RGB565;
-	dest_fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
+	//dest_fmt.fmt.pix.field       = V4L2_FIELD_INTERLACED;
+	//dest_fmt.fmt.pix.colorspace       = V4L2_COLORSPACE_SRGB;
 	out_length = fmt.fmt.pix.width*fmt.fmt.pix.height*2;
 	pOutBuf = (unsigned char*)malloc(out_length);
 #else
@@ -166,7 +175,7 @@ int main(int argc, char **argv)
 	type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
 	xioctl(fd, VIDIOC_STREAMON, &type);
-	for (i = 0; i < 5; i++) {
+	for (i = 0; i < 20; i++) {
 		do {
 			FD_ZERO(&fds);
 			FD_SET(fd, &fds);
@@ -188,17 +197,34 @@ int main(int argc, char **argv)
 		xioctl(fd, VIDIOC_DQBUF, &buf);
 
 		//if (buf.bytesused != )
-		printf("buf.bytesused:%d\n", buf.bytesused);
+		//printf("buf.bytesused:%d\n", buf.bytesused);
 		if (buf.bytesused != yuv_length)
 			goto _end;
 		
 		pOutBufTmp = pOutBuf;
+		t1 = get_time_now();
 		ret = v4lconvert_convert(v4l2_conv, &fmt, &dest_fmt, buffers[buf.index].start, buf.bytesused,
 			pOutBufTmp, out_length);
+		printf("convert time:[%d]%d\n", i, get_time_now()-t1);
 		if (ret>0)
 		{
-			printf("ret:%d\n", ret);
-			memcpy(fb_buf, pOutBuf, out_length);
+			//memcpy(fb_buf, pOutBuf, out_length);
+			char *pMem1 = pOutBuf;
+			static char *pBuf2 = NULL;
+			if (!pBuf2)
+			{
+				pBuf2 = (char*)malloc(out_length);
+			}
+			unsigned short *pShort2 = (unsigned short *)pBuf2;
+			t1 = get_time_now();
+			for (int i=0; i<320; i++)
+				for (int j=240; j>0; j--)
+				{
+					*pShort2++ = *(unsigned short*)(pMem1 + 2*j*320+ 2*i);
+				}
+				printf("convert time rorate:[%d]%d\n", i, get_time_now()-t1);
+
+				memcpy(fb_buf, pBuf2, out_length);
 #if 0
 			sprintf(out_name, "out%03d.ppm", i);
 			fout = fopen(out_name, "w");

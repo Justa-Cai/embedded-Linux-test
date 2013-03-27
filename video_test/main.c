@@ -17,6 +17,7 @@
 #include <linux/videodev2.h>
 #include <linux/fb.h>
 #include <linux/kd.h>
+#include <linux/dvb/video.h>
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 
@@ -64,10 +65,45 @@ static int xioctl(int fh, int request, void *arg)
         return r;
 }
 
+static float tbl_1_4075X[513];
+static float tbl_0_3455X[513];
+static float tbl_0_7169X[513];
+static float tbl_1_7990X[513];
+
+static float *tbl_1_4075X_Center = &tbl_1_4075X[256];
+static float *tbl_0_3455X_Center = &tbl_0_3455X[256];
+static float *tbl_0_7169X_Center = &tbl_0_7169X[256];
+static float *tbl_1_7990X_Center = &tbl_1_7990X[256];
+
+static int tbl_128[256];
+void yuv_CreateFloatTable(float *tbl, float fMul)
+{
+	for (int i=0; i<512;i++)
+	{
+		tbl[i] = fMul * (i - 256);
+		//tbl[i] = fMul * i;
+	}
+}
+
+void yuv_float_table_init()
+{
+	yuv_CreateFloatTable(tbl_1_4075X, 1.4075);
+	yuv_CreateFloatTable(tbl_0_3455X, 0.3455);
+	yuv_CreateFloatTable(tbl_0_7169X, 0.7169);
+	yuv_CreateFloatTable(tbl_1_7990X, 1.7990);
+
+	for (int i=0; i<256; i++)
+		tbl_128[i] = (i-128);
+}
+
+
 #define CAL_YUV_R(y, cb, cr) (y + 1.4075*(cr-128))
 #define CAL_YUV_G(y, cb, cr) (y - 0.3455 * (cb - 128) - (0.7169 * (cr - 128)))
 #define CAL_YUV_B(y, cb, cr) (y + 1.7790 * (cb - 128))
 
+#define CAL_YUV_R1(y, cb, cr) (y + tbl_1_4075X_Center[tbl_128[cr]])
+#define CAL_YUV_G1(y, cb, cr) (y - tbl_0_3455X_Center[tbl_128[cb]] - (tbl_0_7169X_Center[tbl_128[cr]]))
+#define CAL_YUV_B1(y, cb, cr) (y + tbl_1_7990X_Center[tbl_128[cb]])
 //#define CAL_YUV_R(y, u, v) (y+ 0 * u + 1.13983 * v)
 //#define CAL_YUV_G(y, u, v) (y -0.39465 * u + -0.58060 * v)
 //#define CAL_YUV_B(y, u, v) (y -0.03211 * u + 0 * v)
@@ -81,13 +117,25 @@ static inline unsigned char clamp(float v)
 		return (unsigned char)v;
 }
 
+static unsigned int get_time_now()
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return tv.tv_sec*1000 + tv.tv_usec/1000;
+}
+
+#define CLIP(color) (unsigned char)(((color) > 0xFF) ? 0xff : (((color) < 0) ? 0 : (color)))
+
+
 int yuv2rgb(const unsigned char *pYuv, int length)
 {
 	char *ptr;
 	unsigned char r,g,b;
 	unsigned short v, *pShort, *pShort2;
 	unsigned char *pMem1;
-	float cb0, y0, cr0, y1;
+	int cb0, cr0;
+	float y0, y1;
+	unsigned int t1;
 
 	static char *pBuf = NULL;
 	static char *pBuf2 = NULL;
@@ -100,32 +148,60 @@ int yuv2rgb(const unsigned char *pYuv, int length)
 	ptr = pBuf;
 	pShort = (unsigned short*)pBuf;
 
+	t1 = get_time_now();
+#if 1
 	for (int i=0; i<length;)
 	{
 		y0  = (unsigned char)pYuv[i++];
 		cb0 = (unsigned char)pYuv[i++];
 		y1  = (unsigned char)pYuv[i++];
 		cr0 = (unsigned char)pYuv[i++];
-		//cb0 = 128;
-		//cr0 = 128;
-		//cb0 = 0;
-		//cr0 = 0;
-			//             11             7  6    5         0
-			// R5 R4 R3 R2 R1 G6 G5 G4 G3 G2 G1 B5 B4 B3 B2 B1 
-		r = clamp(CAL_YUV_R(y0, cb0, cr0));
-		g = clamp(CAL_YUV_G(y0, cb0, cr0));
-		b = clamp(CAL_YUV_B(y0, cb0, cr0));
+
+		//             11             7  6    5         0
+		// R5 R4 R3 R2 R1 G6 G5 G4 G3 G2 G1 B5 B4 B3 B2 B1 
+		r = clamp(CAL_YUV_R1(y0, cb0, cr0));
+		g = clamp(CAL_YUV_G1(y0, cb0, cr0));
+		b = clamp(CAL_YUV_B1(y0, cb0, cr0));
 		v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
 		*pShort++=v;
 
-		r = clamp(CAL_YUV_R(y1, cb0, cr0));
-		g = clamp(CAL_YUV_G(y1, cb0, cr0));
-		b = clamp(CAL_YUV_B(y1, cb0, cr0));
+		r = clamp(CAL_YUV_R1(y1, cb0, cr0));
+		g = clamp(CAL_YUV_G1(y1, cb0, cr0));
+		b = clamp(CAL_YUV_B1(y1, cb0, cr0));
 		v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
 		*pShort++= v;
 
 	}
+#else
+	for (int i=0; i<length;i+=4)
+	{
+		y0  = (unsigned char)*pYuv++;
+		int u = (unsigned char)*pYuv++;
+		y1  = (unsigned char)*pYuv++;
+		int v = (unsigned char)*pYuv++;
 
+		int u1 = (((u - 128) << 7) +  (u - 128)) >> 6;
+		int rg = (((u - 128) << 1) +  (u - 128) +
+			((v - 128) << 2) + ((v - 128) << 1)) >> 3;
+		int v1 = (((v - 128) << 1) +  (v - 128)) >> 1;
+
+		//             11             7  6    5         0
+		// R5 R4 R3 R2 R1 G6 G5 G4 G3 G2 G1 B5 B4 B3 B2 B1 
+		r = CLIP(y0 + v1);
+		g = CLIP(y0 - rg);
+		b = CLIP(y0 + u1);
+		v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
+		*pShort++=v;
+
+		r = CLIP(y1 + v1);
+		g = CLIP(y1 - rg);
+		b = CLIP(y1 + u1);
+		v = ((((r>>3)&0x1f)<<11) | ((g>>2&0x3f)<<5) | ((b>>3)&0x1f));
+		*pShort++= v;
+	}
+#endif
+
+	printf("fly:%d ", get_time_now()-t1);
 
 	// rorate 90
 	//  ------------------           ---------------------
@@ -136,6 +212,7 @@ int yuv2rgb(const unsigned char *pYuv, int length)
 	// |                            |
 	// |                            |
 
+	t1 = get_time_now();
 	pMem1 = pBuf;
 	pShort = (unsigned short *)pBuf;
 	pShort2 = (unsigned short *)pBuf2;
@@ -146,13 +223,15 @@ int yuv2rgb(const unsigned char *pYuv, int length)
 	}
 
 	memcpy(fb_buf, pBuf2, finfo.smem_len);
+	printf("rorate:%d\n", get_time_now()-t1);
 	return 0;
 }
 
 static void process_image(const void *p, int size)
 {
 	static int i=0;
-	printf("Capture %d\n", i++);
+
+	printf("Capture %d  ", i++);
 	if (out_buf) {
 		fseek(out_fp, 0, SEEK_SET);
 		fwrite(p, size, 1, out_fp);
@@ -162,7 +241,6 @@ static void process_image(const void *p, int size)
 
 	if (fb_buf && size==320*240*2)
 	{
-		printf("size:%d\n", size);
 		yuv2rgb(p, size);
 		return;
 	}
@@ -282,8 +360,10 @@ static void mainloop(void)
                         /* Timeout. */
                         tv.tv_sec = 2;
                         tv.tv_usec = 0;
+						int t1 = get_time_now();
 
                         r = select(fd + 1, &fds, NULL, NULL, &tv);
+						printf("select:%d ", get_time_now() - t1);
 
                         if (-1 == r) {
                                 if (EINTR == errno)
@@ -702,8 +782,9 @@ static int vt_set_mode(int graphics)
 
 int main(int argc, char **argv)
 {
-	int fd;
-
+	int fb_fd;
+	
+	yuv_float_table_init();
 	const char *fb_path=NULL;
         dev_name = "/dev/video0";
 
@@ -773,13 +854,13 @@ int main(int argc, char **argv)
 		if (fb_path)
 		{
 
-			fd = open(fb_path, O_RDWR);
-			if (fd>0)
+			fb_fd= open(fb_path, O_RDWR);
+			if (fb_fd>0)
 			{
-				ioctl(fd, FBIOGET_VSCREENINFO, &vinfo);
-				ioctl(fd, FBIOGET_FSCREENINFO, &finfo);
+				ioctl(fb_fd, FBIOGET_VSCREENINFO, &vinfo);
+				ioctl(fb_fd, FBIOGET_FSCREENINFO, &finfo);
 				printf("[FB]x:%d y:%d bits_per_pixel:%d\n", vinfo.xres, vinfo.yres, vinfo.bits_per_pixel);
-				fb_buf = (char*)mmap(NULL, finfo.smem_len, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+				fb_buf = (char*)mmap(NULL, finfo.smem_len, PROT_READ|PROT_WRITE, MAP_SHARED, fb_fd, 0);
 				vt_set_mode(1);
 			}
 		}
@@ -794,11 +875,11 @@ int main(int argc, char **argv)
         fprintf(stderr, "\n");
 		if (out_fp)
 			fclose(out_fp);
-		if (fd>0)
+		if (fb_fd>0)
 		{
 			if (fb_buf)
 				munmap(fb_buf, finfo.smem_len);
-			close(fd);
+			close(fb_fd);
 		}
         return 0;
 }
